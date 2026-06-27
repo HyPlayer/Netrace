@@ -1,12 +1,18 @@
 # Aegis MITM TUI
 
 Textual-based helper for driving an embedded mitmproxy active MITM against the
-Aegis `/xeapi` flow during local reverse-engineering.
+Aegis `/xeapi` flow and for observing traditional `/eapi` traffic during local
+reverse-engineering.
 
 The addon replaces the public key returned by
 `/gorilla/anti/crawler/security/key/get` with a local X25519 key. That lets the
 proxy unwrap `S`, decrypt `B`, show the plaintext request, then rewrap the same
 `S` plaintext with the real server public key before forwarding the request.
+
+For `/eapi`, the addon decrypts the form `params` envelope with the legacy eapi
+key, verifies the MD5 envelope, shows the plaintext request, and attempts to
+decrypt the response with the same legacy response key. `/eapi` requests are not
+rewritten.
 
 ## Install
 

@@ -23,6 +23,7 @@ from tool.aegis_mitm_core import (
     KEY_PATH_MARKER,
     decode_key_response_body,
     decrypt_and_rewrap_xeapi_request,
+    decrypt_eapi_request_body,
     encode_key_response_body,
     extract_request_nonce,
     rewrite_key_response,
@@ -122,6 +123,9 @@ class AegisMitmAddon:
                 flow.metadata["aegis_request_nonce"] = nonce
                 self._event("key-request", flow, status=f"nonce={nonce}")
             return
+        if "/eapi/" in flow.request.path:
+            self._handle_eapi_request(flow)
+            return
         if "/xeapi/" not in flow.request.path:
             return
         if self.real_public_info is None:
@@ -174,6 +178,41 @@ class AegisMitmAddon:
                 self._maybe_force_key_refresh(flow)
                 return
             self._handle_xeapi_response(flow)
+        elif "/eapi/" in flow.request.path:
+            if flow.metadata.get("aegis_mitm_hit"):
+                self._handle_eapi_response(flow)
+
+    def _handle_eapi_request(self, flow: http.HTTPFlow) -> None:
+        content_type = flow.request.headers.get("content-type", "")
+        if "application/x-www-form-urlencoded" not in content_type:
+            self._event("miss", flow, status=f"unexpected eapi content-type: {content_type or '<empty>'}")
+            return
+        raw_request = flow.request.content
+        try:
+            body = decrypt_eapi_request_body(raw_request)
+        except Exception as exc:
+            self._event("decrypt-failed", flow, status=f"eapi: {exc}")
+            return
+
+        flow.metadata["aegis_mitm_hit"] = True
+        flow.metadata["aegis_protocol"] = "eapi"
+        raw_dump_path = self._dump(flow, "eapi-request-raw", raw_request)
+        dump_path = self._dump(flow, "eapi-request", body.plain)
+        body_text, body_format = extract_body_payload_text(body.plain)
+        self._event(
+            "request",
+            flow,
+            status="eapi-decrypted",
+            detail=text_preview(body.plain),
+            body=body_text,
+            body_format=body_format,
+            raw_detail=text_preview(raw_request[:2000]),
+            raw_dump_path=str(raw_dump_path) if raw_dump_path else None,
+            eapi_path=body.api_path,
+            eapi_digest=body.digest,
+            eapi_digest_ok=body.digest_ok,
+            dump_path=str(dump_path) if dump_path else None,
+        )
 
     def _handle_key_response(self, flow: http.HTTPFlow) -> None:
         if flow.response is None:
@@ -278,6 +317,48 @@ class AegisMitmAddon:
             "response",
             flow,
             status=f"decrypted:{mode}",
+            detail=text_preview(plain),
+            body=response_body_text,
+            body_format=response_body_format,
+            raw_detail=text_preview(flow.response.content[:2000]),
+            raw_dump_path=str(raw_dump_path) if raw_dump_path else None,
+            dump_path=str(dump_path) if dump_path else None,
+        )
+
+    def _handle_eapi_response(self, flow: http.HTTPFlow) -> None:
+        if flow.response is None:
+            return
+        result = try_decrypt_response_body(
+            flow.response.content,
+            request_key=None,
+            session_key=None,
+            mode="legacy",
+        )
+        if result is None:
+            dump_path = self._dump(flow, "eapi-response-decrypt-failed", flow.response.content)
+            response_body_text, response_body_format = extract_body_payload_text(flow.response.content)
+            self._event(
+                "response-decrypt-failed",
+                flow,
+                status="eapi:legacy-failed",
+                content_type=flow.response.headers.get("content-type", ""),
+                content_encoding=flow.response.headers.get("content-encoding", ""),
+                body_len=len(flow.response.content),
+                first32=flow.response.content[:32].hex(),
+                detail=text_preview(flow.response.content[:1000]),
+                body=response_body_text,
+                body_format=response_body_format,
+                dump_path=str(dump_path) if dump_path else None,
+            )
+            return
+        plain, mode = result
+        raw_dump_path = self._dump(flow, "eapi-response-raw", flow.response.content)
+        dump_path = self._dump(flow, "eapi-response", plain)
+        response_body_text, response_body_format = extract_body_payload_text(plain)
+        self._event(
+            "response",
+            flow,
+            status=f"eapi-decrypted:{mode}",
             detail=text_preview(plain),
             body=response_body_text,
             body_format=response_body_format,

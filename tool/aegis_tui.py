@@ -774,7 +774,18 @@ class AegisMitmTui(App[None]):
             "r_plain": flow.r_plain,
         }
         for event in flow.events:
-            for name in ("version", "sk", "signature_ok", "body_encoding", "body_gzip", "plaintext_encoding", "public_key_ttl_seconds"):
+            for name in (
+                "version",
+                "sk",
+                "signature_ok",
+                "body_encoding",
+                "body_gzip",
+                "plaintext_encoding",
+                "public_key_ttl_seconds",
+                "eapi_path",
+                "eapi_digest",
+                "eapi_digest_ok",
+            ):
                 if name in event:
                     session_fields[name] = str(event[name])
         for name, value in session_fields.items():

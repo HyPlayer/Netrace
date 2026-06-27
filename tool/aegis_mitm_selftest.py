@@ -20,6 +20,7 @@ from tool.aegis_mitm_core import (
     decode_public_key_plaintext,
     decrypt_and_rewrap_xeapi_request,
     decrypt_eapi_params,
+    decrypt_eapi_request_body,
     encode_key_response_body,
     encrypt_key_response_payload,
     extract_request_nonce,
@@ -123,6 +124,10 @@ def main() -> None:
     eapi_params = urllib.parse.urlencode({"params": _serial_eapi_params("/api/selftest", {"nonce": request_nonce})})
     assert extract_request_nonce(eapi_params.encode("utf-8")) == request_nonce
     assert json.loads(decrypt_eapi_params(urllib.parse.parse_qs(eapi_params)["params"][0]))["nonce"] == request_nonce
+    eapi_body = decrypt_eapi_request_body(eapi_params.encode("utf-8"))
+    assert eapi_body.api_path == "/api/selftest"
+    assert eapi_body.digest_ok is True
+    assert json.loads(eapi_body.plain.decode("utf-8"))["nonce"] == request_nonce
     print("aegis mitm selftest ok")
 
 

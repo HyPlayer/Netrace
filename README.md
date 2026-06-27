@@ -1,6 +1,6 @@
 # XeApi Aegis MITM
 
-这是一个用于本地逆向和调试网易云音乐 `/xeapi` Aegis 加密流量的 MITM 工具。它内嵌 mitmproxy，并提供一个 TUI 界面来查看命中的请求、响应、解密后的 payload、原文和 session key 信息。
+这是一个用于本地逆向和调试网易云音乐 `/xeapi` Aegis 加密流量和传统 `/eapi` 加密流量的 MITM 工具。它内嵌 mitmproxy，并提供一个 TUI 界面来查看命中的请求、响应、解密后的 payload、原文和 session key 信息。
 
 请只在你自己的设备、账号和授权网络环境中使用。抓包结果、证书、私钥、cookie、日志都可能包含敏感信息，不要提交或分享。
 
@@ -61,7 +61,7 @@ uv run aegis-mitm-tui --upstream-proxy socks5://127.0.0.1:9370
 3. 在手机 Wi-Fi 代理中填入：
    - 主机：电脑局域网 IP
    - 端口：`8080`
-4. 打开目标 App，让它发起 `/xeapi` 请求。
+4. 打开目标 App，让它发起 `/xeapi` 或 `/eapi` 请求。
 
 命中的请求会出现在 TUI 左侧列表。点选请求后，右侧可以查看：
 
@@ -94,13 +94,15 @@ tool/proxy-server-x25519.key
 
 ## 它是怎么工作的
 
-工具会拦截 Aegis 公钥接口：
+对于 `/xeapi`，工具会拦截 Aegis 公钥接口：
 
 ```text
 /gorilla/anti/crawler/security/key/get
 ```
 
 然后把服务端返回的 Aegis 公钥替换成本地代理公钥。这样代理就可以解开请求里的 `S`，解密 `B`，展示明文请求，再用真实服务端公钥重新封装并放行。
+
+对于 `/eapi`，工具会解开表单中的 `params` 字段，校验 envelope 里的 MD5，并尝试用 legacy eapi response key 解密响应。`/eapi` 请求不会被改写，只做观察和展示。
 
 没有命中的请求不会处理，会原样放行。
 
@@ -140,7 +142,7 @@ tool/runs/dumps/           请求和响应 dump
 
 - 确认手机代理指向电脑 IP 和 `8080`
 - 确认证书已经被设备信任
-- 确认 App 真的发起了 `/xeapi` 请求
+- 确认 App 真的发起了 `/xeapi` 或 `/eapi` 请求
 - 看底部日志是否出现 `real public key missing; wait for key/get`
 
 如果响应无法解密：

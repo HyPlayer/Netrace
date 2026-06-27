@@ -62,6 +62,51 @@ def decrypt_eapi_params(params: str) -> str:
     return text
 
 
+@dataclasses.dataclass
+class EapiRequestBody:
+    plain: bytes
+    api_path: str
+    digest: str
+    digest_ok: bool | None
+    envelope: str
+
+
+def eapi_digest(api_path: str, payload_text: str) -> str:
+    raw = f"nobody{api_path}use{payload_text}md5forencrypt".encode("utf-8")
+    return hashlib.md5(raw).hexdigest()
+
+
+def parse_eapi_envelope(text: str) -> EapiRequestBody:
+    parts = text.split(EAPI_SEPARATOR, 2)
+    if len(parts) < 3:
+        return EapiRequestBody(
+            plain=text.encode("utf-8", errors="replace"),
+            api_path="",
+            digest="",
+            digest_ok=None,
+            envelope=text,
+        )
+    api_path, payload_text, digest = parts
+    expected = eapi_digest(api_path, payload_text)
+    return EapiRequestBody(
+        plain=payload_text.encode("utf-8", errors="replace"),
+        api_path=api_path,
+        digest=digest,
+        digest_ok=digest.lower() == expected,
+        envelope=text,
+    )
+
+
+def decrypt_eapi_request_body(body: bytes) -> EapiRequestBody:
+    values = parse_form_bytes(body)
+    params = values.get("params")
+    if not params:
+        raise ValueError("missing form field: params")
+    cipher = bytes.fromhex(params)
+    plain = AegisCrypto.aes_decrypt(LEGACY_EAPI_RESPONSE_KEY, cipher, mode=1)
+    return parse_eapi_envelope(plain.decode("utf-8", errors="replace"))
+
+
 def find_nonce_in_json_text(text: str) -> str | None:
     try:
         payload = json.loads(text)
@@ -357,16 +402,20 @@ def try_decrypt_response_body(
 ) -> tuple[bytes, str] | None:
     if isinstance(body, str):
         raw_body = body.strip().encode("utf-8")
+        stripped_body = raw_body
     else:
-        raw_body = body.strip()
+        raw_body = body
+        stripped_body = body.strip()
     if not raw_body:
         return None
 
     ciphertexts: list[tuple[str, bytes]] = []
     if len(raw_body) % 16 == 0:
         ciphertexts.append(("raw", raw_body))
+    if stripped_body != raw_body and len(stripped_body) % 16 == 0:
+        ciphertexts.append(("raw-stripped", stripped_body))
     try:
-        ciphertexts.append(("b64", b64d(raw_body.decode("ascii"))))
+        ciphertexts.append(("b64", b64d(stripped_body.decode("ascii"))))
     except Exception:
         pass
     if not ciphertexts:
