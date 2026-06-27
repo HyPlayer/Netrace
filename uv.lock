@@ -1193,6 +1193,30 @@ wheels = [
 ]
 
 [[package]]
+name = "netrace"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "cryptography", version = "44.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "cryptography", version = "48.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "mitmproxy", version = "11.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "mitmproxy", version = "12.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "requests" },
+    { name = "textual" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography" },
+    { name = "mitmproxy" },
+    { name = "requests" },
+    { name = "textual" },
+]
+
+[package.metadata.requires-dev]
+dev = []
+
+[[package]]
 name = "passlib"
 version = "1.7.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1682,30 +1706,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/c7/79/12135bdf8b9c9367b
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a4/f5/10b68b7b1544245097b2a1b8238f66f2fc6dcaeb24ba5d917f52bd2eed4f/wsproto-1.3.2-py3-none-any.whl", hash = "sha256:61eea322cdf56e8cc904bd3ad7573359a242ba65688716b0710a5eb12beab584", size = 24405, upload-time = "2025-11-20T18:18:00.454Z" },
 ]
-
-[[package]]
-name = "xeapi-aegis-mitm"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "cryptography", version = "44.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "cryptography", version = "48.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "mitmproxy", version = "11.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "mitmproxy", version = "12.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "requests" },
-    { name = "textual" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "cryptography" },
-    { name = "mitmproxy" },
-    { name = "requests" },
-    { name = "textual" },
-]
-
-[package.metadata.requires-dev]
-dev = []
 
 [[package]]
 name = "zstandard"

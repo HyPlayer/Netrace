@@ -48,7 +48,7 @@ class EmbeddedMitmRunner:
         self.socks_bridge: Socks5HttpBridge | None = None
 
     def start(self) -> None:
-        self.thread = threading.Thread(target=self._run, name="aegis-mitmproxy", daemon=True)
+        self.thread = threading.Thread(target=self._run, name="netrace-mitmproxy", daemon=True)
         self.thread.start()
         self.started.wait(timeout=5)
         if self.error is not None:
@@ -966,7 +966,7 @@ class AegisMitmTui(App[None]):
 def build_parser() -> argparse.ArgumentParser:
     from tool.aegis_mitm_core import DEFAULT_SIGN_KEY_B64, DEFAULT_STATIC_KEY_HEX
 
-    parser = argparse.ArgumentParser(description="Textual TUI for the Aegis /xeapi MITM addon")
+    parser = argparse.ArgumentParser(description="Netrace TUI for encrypted /xeapi and /eapi traffic")
     parser.add_argument("--listen-host", default="0.0.0.0")
     parser.add_argument("--listen-port", type=int, default=8080)
     parser.add_argument("--confdir", default="", help="mitmproxy config directory containing mitmproxy-ca.pem")

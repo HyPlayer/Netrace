@@ -1,7 +1,7 @@
 [project]
-name = "xeapi-aegis-mitm"
+name = "netrace"
 version = "0.1.0"
-description = "Aegis /xeapi MITM tooling"
+description = "Network tracing TUI for encrypted /xeapi and /eapi traffic"
 requires-python = ">=3.11"
 dependencies = [
   "cryptography",
@@ -11,6 +11,8 @@ dependencies = [
 ]
 
 [project.scripts]
+netrace = "tool.aegis_tui:main"
+netrace-selftest = "tool.aegis_mitm_selftest:main"
 aegis-mitm-tui = "tool.aegis_tui:main"
 aegis-mitm-selftest = "tool.aegis_mitm_selftest:main"
 

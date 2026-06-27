@@ -1,6 +1,6 @@
-# XeApi Aegis MITM
+# Netrace
 
-这是一个用于本地逆向和调试网易云音乐 `/xeapi` Aegis 加密流量和传统 `/eapi` 加密流量的 MITM 工具。它内嵌 mitmproxy，并提供一个 TUI 界面来查看命中的请求、响应、解密后的 payload、原文和 session key 信息。
+Netrace 是一个用于本地逆向和调试网易云音乐 `/xeapi` Aegis 加密流量和传统 `/eapi` 加密流量的 MITM 工具。它内嵌 mitmproxy，并提供一个 TUI 界面来查看命中的请求、响应、解密后的 payload、原文和 session key 信息。
 
 请只在你自己的设备、账号和授权网络环境中使用。抓包结果、证书、私钥、cookie、日志都可能包含敏感信息，不要提交或分享。
 
@@ -16,7 +16,7 @@
 
 ```powershell
 uv sync
-uv run aegis-mitm-selftest
+uv run netrace-selftest
 ```
 
 如果看到下面输出，说明基础加解密链路正常：
@@ -30,7 +30,7 @@ aegis mitm selftest ok
 在项目根目录运行：
 
 ```powershell
-uv run aegis-mitm-tui
+uv run netrace
 ```
 
 默认配置是：
@@ -45,13 +45,13 @@ uv run aegis-mitm-tui
 也可以显式指定：
 
 ```powershell
-uv run aegis-mitm-tui --listen-host 0.0.0.0 --listen-port 8080 --upstream-proxy http://127.0.0.1:9370
+uv run netrace --listen-host 0.0.0.0 --listen-port 8080 --upstream-proxy http://127.0.0.1:9370
 ```
 
 如果你的上游是 SOCKS5，也可以这样：
 
 ```powershell
-uv run aegis-mitm-tui --upstream-proxy socks5://127.0.0.1:9370
+uv run netrace --upstream-proxy socks5://127.0.0.1:9370
 ```
 
 ## 配置手机代理
@@ -111,10 +111,10 @@ tool/proxy-server-x25519.key
 ## 常用参数
 
 ```powershell
-uv run aegis-mitm-tui --response-mode auto
-uv run aegis-mitm-tui --ssl-verify-upstream
-uv run aegis-mitm-tui --public-key-ttl-seconds 600
-uv run aegis-mitm-tui --no-force-key-refresh-on-miss
+uv run netrace --response-mode auto
+uv run netrace --ssl-verify-upstream
+uv run netrace --public-key-ttl-seconds 600
+uv run netrace --no-force-key-refresh-on-miss
 ```
 
 `--response-mode` 可选：

@@ -1,8 +1,8 @@
-# Aegis MITM TUI
+# Netrace TUI
 
-Textual-based helper for driving an embedded mitmproxy active MITM against the
-Aegis `/xeapi` flow and for observing traditional `/eapi` traffic during local
-reverse-engineering.
+Textual-based helper for driving Netrace, an embedded mitmproxy TUI for active
+MITM against the Aegis `/xeapi` flow and for observing traditional `/eapi`
+traffic during local reverse-engineering.
 
 The addon replaces the public key returned by
 `/gorilla/anti/crawler/security/key/get` with a local X25519 key. That lets the
@@ -23,7 +23,7 @@ uv sync
 ## Run
 
 ```powershell
-uv run aegis-mitm-tui --listen-host 0.0.0.0 --listen-port 8080
+uv run netrace --listen-host 0.0.0.0 --listen-port 8080
 ```
 
 Configure the Android device or emulator to use the mitmproxy listener as its
