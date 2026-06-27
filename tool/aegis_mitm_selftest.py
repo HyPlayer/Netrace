@@ -14,7 +14,18 @@ if str(ROOT) not in sys.path:
 from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from aegis_xeapi import AegisConfig, AegisCrypto, AegisXeapiClient, PublicKeyInfo, b64d, b64e
+from aegis_xeapi import (
+    EAPI_SEPARATOR,
+    KEY_GET_API_PATH,
+    AegisConfig,
+    AegisCrypto,
+    AegisXeapiClient,
+    PublicKeyInfo,
+    b64d,
+    b64e,
+    decode_session_key,
+    eapi_digest,
+)
 from tool.aegis_mitm_core import (
     decode_key_response_body,
     decode_public_key_plaintext,
@@ -103,6 +114,47 @@ def main() -> None:
         AegisConfig(static_key=static_key, sign_key=sign_key, device_id="selftest"),
         public_key_info=PublicKeyInfo.from_json(_key_json(proxy_public)),
     )
+    key_request_body, key_request_nonce = client.build_public_key_request_body(
+        active=False,
+        timestamp=timestamp,
+        nonce=request_nonce,
+    )
+    assert key_request_nonce == request_nonce
+    key_request_params = urllib.parse.parse_qs(key_request_body.decode("utf-8"))["params"][0]
+    key_request_plain = AegisCrypto.aes_decrypt(
+        b"e82ckenh8dichen8",
+        bytes.fromhex(key_request_params),
+        mode=1,
+    ).decode("utf-8")
+    key_api_path, key_payload_text, key_digest = key_request_plain.split(EAPI_SEPARATOR)
+    assert key_api_path == KEY_GET_API_PATH
+    assert key_digest == eapi_digest(KEY_GET_API_PATH, key_payload_text)
+    key_payload = json.loads(key_payload_text)
+    assert key_payload["currentKeyVersion"] == "1000000000000"
+    assert key_payload["requestType"] == "passive"
+    assert key_payload["signature"] == response_signature(sign_key, timestamp, request_nonce)
+
+    key_response_payload = {
+        "code": 200,
+        "data": {
+            "encryptedData": encrypt_key_response_payload(
+                original_key_json,
+                static_key,
+                plaintext_encoding="json",
+            ),
+            "signature": response_signature(sign_key, timestamp, request_nonce),
+            "timestamp": timestamp,
+        },
+    }
+    key_response_plain = json.dumps(key_response_payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    key_response_cipher = AegisCrypto.aes_encrypt(b"e82ckenh8dichen8", key_response_plain, mode=1)
+    assert isinstance(key_response_cipher, bytes)
+    decoded_key_info = client.decode_public_key_response_body(
+        key_response_cipher,
+        request_nonce=request_nonce,
+    )
+    assert decoded_key_info.public_key == real_public
+
     request_plain = {"uri": "/api/selftest", "body": b64e(b"hello")}
     proxy_body = client.encrypt_xeapi_body(request_plain).encode("utf-8")
     rewritten, dynamic_key, plain, r_plain = decrypt_and_rewrap_xeapi_request(
@@ -120,6 +172,29 @@ def main() -> None:
         own_private_key=real_private,
     )
     assert real_s_plain.startswith(b64e(dynamic_key).encode("ascii"))
+
+    session_id = "f5af34cd95e64d48a33dd00f01f03384"
+    session_key_text = "44866835ed63479da39e05d2733a7121"
+    assert decode_session_key(session_key_text) == session_key_text.encode("utf-8")
+    client.handle_response_headers({"x-encr-ssid": session_id, "x-encr-sskey": session_key_text})
+    session_body = client.encrypt_xeapi_body(request_plain).encode("utf-8")
+    session_values = urllib.parse.parse_qs(session_body.decode("utf-8"))
+    session_s_plain = AegisCrypto.unwrap_dynamic_key_for_test(
+        b64d(session_values["S"][0]),
+        own_private_key=proxy_private,
+    )
+    assert session_s_plain.startswith(b64e(session_key_text.encode("utf-8")).encode("ascii"))
+    assert (
+        AegisCrypto.decrypt_version_info(b64d(session_values["R"][0]), static_key=static_key)
+        == f"1000000000000|{session_id}".encode("utf-8")
+    )
+    assert json.loads(
+        AegisCrypto.decrypt_business_data(
+            b64d(session_values["B"][0]),
+            static_key=static_key,
+            dynamic_key=session_key_text.encode("utf-8"),
+        ).decode("utf-8")
+    ) == request_plain
 
     eapi_params = urllib.parse.urlencode({"params": _serial_eapi_params("/api/selftest", {"nonce": request_nonce})})
     assert extract_request_nonce(eapi_params.encode("utf-8")) == request_nonce

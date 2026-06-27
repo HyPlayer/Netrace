@@ -19,7 +19,8 @@ AES mode 2: GCM with 12-byte IV and 16-byte tag
 Business body B
 Dynamic-key wrapper S
 Version block R, currently configurable
-Cold-start public-key fetch scaffold
+Cold-start public-key fetch through /eapi/gorilla/anti/crawler/security/key/get
+Public-key response decrypt + signature verification
 Response header handling for session/public-key update
 Offline decrypt helpers when the dynamic/session key is known
 ```
@@ -161,6 +162,25 @@ Expected file shape:
 The live key endpoint may wrap this under a `data` object. The Python loader accepts both direct endpoint JSON and direct file JSON.
 The loader also preserves the raw public-key JSON and accepts common version aliases such as `keyVersion` and `currentKeyVersion`.
 
+Native key refresh requests are sent as standard eapi form data:
+
+```text
+POST /eapi/gorilla/anti/crawler/security/key/get
+Content-Type: application/x-www-form-urlencoded
+
+params=<AES-ECB-hex eapi serialdata>
+```
+
+The decrypted eapi plaintext is:
+
+```text
+/api/gorilla/anti/crawler/security/key/get
+-36cd479b6b5-
+{"appVersion":"...","currentKeyVersion":"...","deviceId":"...","nonce":"...","signature":"..."}
+-36cd479b6b5-
+md5
+```
+
 Native key refresh responses are not just the plain key JSON. The native
 `onNetworkResponse` path expects:
 
@@ -263,7 +283,6 @@ Open calibration points:
 
 ```text
 1. Implement Java-style xeapi request envelope construction.
-2. Validate native key-refresh encrypted response handling against a live flow.
-3. Validate response decrypt mode per endpoint: legacy eapi key vs session/dynamic key.
-4. Capture dynamic/session key once to validate B/S/R against the provided HAR.
+2. Validate response decrypt mode per endpoint: legacy eapi key vs session/dynamic key.
+3. Capture more dynamic/session key samples to validate B/S/R across app states.
 ```

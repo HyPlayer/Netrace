@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Python reimplementation scaffold for NetEase Aegis /xeapi encryption.
+Python reimplementation for NetEase Aegis /xeapi encryption.
 
 This file intentionally covers the whole client-side flow:
 
 1. Keep local Aegis state: static key, sign key, dynamic key, public key info,
    and optional session key.
-2. Fetch/update public key through the Java-side key endpoint shape.
+2. Fetch/update public key through the Java-side eapi key endpoint shape.
 3. Encrypt /xeapi request bodies as B/S/R form fields.
 4. Handle response headers that update session key or trigger public-key refresh.
 5. Decrypt B/R when the caller has the dynamic/session key. S can only be
@@ -30,6 +30,7 @@ from __future__ import annotations
 import base64
 import argparse
 import dataclasses
+import gzip
 import hashlib
 import hmac
 import json
@@ -48,6 +49,9 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 
 ANDROID_B64_NO_WRAP = "android-base64-no-wrap"
+LEGACY_EAPI_KEY = b"e82ckenh8dichen8"
+EAPI_SEPARATOR = "-36cd479b6b5-"
+KEY_GET_API_PATH = "/api/gorilla/anti/crawler/security/key/get"
 
 
 def b64e(data: bytes) -> str:
@@ -237,6 +241,70 @@ class AegisCrypto:
             raise ValueError(f"AES key must be 16/24/32 bytes, got {len(key)}")
 
 
+def eapi_digest(api_path: str, payload_text: str) -> str:
+    raw = f"nobody{api_path}use{payload_text}md5forencrypt".encode("utf-8")
+    return hashlib.md5(raw).hexdigest()
+
+
+def eapi_serial_data(api_path: str, payload: Mapping[str, Any] | str) -> str:
+    """
+    Build the standard NCM eapi params value.
+
+    The plaintext is:
+    api_path + separator + compact_json + separator + md5
+    encrypted with AES-128-ECB key e82ckenh8dichen8 and emitted as uppercase hex.
+    """
+
+    payload_text = (
+        json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+        if isinstance(payload, Mapping)
+        else payload
+    )
+    digest = eapi_digest(api_path, payload_text)
+    plain = f"{api_path}{EAPI_SEPARATOR}{payload_text}{EAPI_SEPARATOR}{digest}".encode("utf-8")
+    cipher = AegisCrypto.aes_encrypt(LEGACY_EAPI_KEY, plain, mode=1)
+    assert isinstance(cipher, bytes)
+    return cipher.hex().upper()
+
+
+def eapi_form_body(api_path: str, payload: Mapping[str, Any] | str) -> bytes:
+    return urllib.parse.urlencode({"params": eapi_serial_data(api_path, payload)}).encode("utf-8")
+
+
+def decrypt_legacy_eapi_response_body(body: bytes | str) -> bytes:
+    """
+    Decrypt eapi/legacy xeapi response bytes.
+
+    Requests normally exposes the post-HTTP-decoding ciphertext as bytes. For
+    offline artifacts this helper also accepts base64 or hex text.
+    """
+
+    raw_body = body.encode("utf-8") if isinstance(body, str) else body
+    stripped = raw_body.strip()
+    attempts: list[bytes] = [raw_body]
+    if stripped != raw_body:
+        attempts.append(stripped)
+    try:
+        attempts.append(b64d(stripped.decode("ascii")))
+    except Exception:
+        pass
+    try:
+        attempts.append(bytes.fromhex(stripped.decode("ascii")))
+    except Exception:
+        pass
+
+    errors: list[str] = []
+    for raw in attempts:
+        try:
+            plain = AegisCrypto.aes_decrypt(LEGACY_EAPI_KEY, raw, mode=1)
+            if plain.startswith(b"\x1f\x8b"):
+                plain = gzip.decompress(plain)
+            return plain
+        except Exception as exc:
+            errors.append(str(exc))
+    raise ValueError("legacy eapi response decrypt failed: " + "; ".join(errors))
+
+
 @dataclasses.dataclass
 class PublicKeyInfo:
     public_key: bytes
@@ -293,10 +361,14 @@ class AegisConfig:
     device_id: str
     os_name: str = "android"
     app_version: str = ""
-    uid: int = 0
+    uid: int | str = 0
     t1: str = ""
     t2: str = ""
-    key_endpoint: str = "https://interface3.music.163.com/gorilla/anti/crawler/security/key/get"
+    check_token: str = ""
+    header: str = "{}"
+    e_r: bool = True
+    key_endpoint: str = "https://interface3.music.163.com/eapi/gorilla/anti/crawler/security/key/get"
+    key_api_path: str = KEY_GET_API_PATH
     update_interval_seconds: int = 300
     hkdf_salt: bytes = b""
     hkdf_info: bytes | None = None
@@ -340,30 +412,94 @@ class AegisXeapiClient:
         active: bool,
         headers: Mapping[str, str] | None = None,
     ) -> PublicKeyInfo:
-        timestamp = str(int(time.time() * 1000))
-        nonce = "".join(str(int.from_bytes(os.urandom(4), "little") % 10) for _ in range(16))
-        signature = self.key_request_signer(self.config.sign_key, timestamp, nonce)
-        body = {
-            "currentKeyVersion": self.public_key_info.version if self.public_key_info else "",
-            "signature": signature,
-            "timestamp": timestamp,
-            "nonce": nonce,
-            "requestType": "active" if active else "passive",
-            "t1": self.config.t1,
-            "t2": self.config.t2,
-            "os": self.config.os_name,
-            "appVersion": self.config.app_version,
-            "deviceId": self.config.device_id,
-            "uid": self.config.uid,
-        }
+        body, request_nonce = self.build_public_key_request_body(active=active)
+        request_headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        request_headers.update(dict(headers or {}))
         response = self.session.post(
             self.config.key_endpoint,
-            json=body,
-            headers=dict(headers or {}),
+            data=body,
+            headers=request_headers,
             timeout=15,
         )
         response.raise_for_status()
-        payload = response.json()
+        return self.decode_public_key_response_body(response.content, request_nonce=request_nonce)
+
+    def build_public_key_request_payload(
+        self,
+        *,
+        active: bool,
+        timestamp: str | None = None,
+        nonce: str | None = None,
+    ) -> tuple[dict[str, Any], str]:
+        if timestamp is None:
+            timestamp = str(int(time.time() * 1000))
+        if nonce is None:
+            nonce = "".join(str(int.from_bytes(os.urandom(4), "little") % 10) for _ in range(16))
+        signature = self.key_request_signer(self.config.sign_key, timestamp, nonce)
+        payload: dict[str, Any] = {
+            "appVersion": self.config.app_version,
+            "currentKeyVersion": self.public_key_info.version if self.public_key_info else "",
+            "deviceId": self.config.device_id,
+            "e_r": self.config.e_r,
+            "header": self.config.header,
+            "nonce": nonce,
+            "os": self.config.os_name,
+            "requestType": "active" if active else "passive",
+            "signature": signature,
+            "timestamp": timestamp,
+            "t1": self.config.t1,
+            "t2": self.config.t2,
+            "uid": str(self.config.uid),
+        }
+        if self.config.check_token:
+            payload["checkToken"] = self.config.check_token
+        return payload, nonce
+
+    def build_public_key_request_body(
+        self,
+        *,
+        active: bool,
+        timestamp: str | None = None,
+        nonce: str | None = None,
+    ) -> tuple[bytes, str]:
+        payload, request_nonce = self.build_public_key_request_payload(
+            active=active,
+            timestamp=timestamp,
+            nonce=nonce,
+        )
+        return eapi_form_body(self.config.key_api_path, payload), request_nonce
+
+    def decode_public_key_response_body(
+        self,
+        body: bytes | str,
+        *,
+        request_nonce: str | None = None,
+    ) -> PublicKeyInfo:
+        try:
+            payload = json.loads((body if isinstance(body, bytes) else body.encode("utf-8")).decode("utf-8"))
+        except Exception:
+            payload = json.loads(decrypt_legacy_eapi_response_body(body).decode("utf-8"))
+        if not isinstance(payload, Mapping):
+            raise ValueError("public-key response is not a JSON object")
+
+        data = payload.get("data")
+        if isinstance(data, Mapping) and isinstance(data.get("encryptedData"), str):
+            timestamp = data.get("timestamp")
+            signature = data.get("signature")
+            if request_nonce and timestamp is not None and isinstance(signature, str):
+                expected = self.key_request_signer(self.config.sign_key, str(timestamp), request_nonce)
+                if not hmac.compare_digest(signature, expected):
+                    raise ValueError("public-key response signature mismatch")
+            raw = b64d(data["encryptedData"])
+            plain = AegisCrypto.aes_decrypt(self.config.static_key, raw, mode=1)
+            try:
+                key_payload = json.loads(plain.decode("utf-8"))
+            except Exception:
+                key_payload = json.loads(b64d(plain.decode("utf-8").strip()).decode("utf-8"))
+            if not isinstance(key_payload, Mapping):
+                raise ValueError("decrypted public-key payload is not a JSON object")
+            return PublicKeyInfo.from_json(key_payload)
+
         if isinstance(payload, Mapping) and "data" in payload and isinstance(payload["data"], Mapping):
             payload = payload["data"]
         return PublicKeyInfo.from_json(payload)
@@ -533,15 +669,12 @@ def decode_session_key(value: str) -> bytes:
     """
     Decode session material from response headers.
 
-    NetEase commonly emits x-encr-sskey as bare hex, while the session id
-    remains an opaque ASCII token. Treat obvious hex as raw bytes so AES uses
-    the real key material instead of the printable representation.
+    Captured Android traffic keeps x-encr-sskey as printable key material. Even
+    when it looks like hexadecimal, the client uses those ASCII bytes directly
+    as the AES key and stores the same text inside S as base64(session_key).
     """
 
-    stripped = value.strip()
-    if stripped and len(stripped) % 2 == 0 and all(c in "0123456789abcdefABCDEF" for c in stripped):
-        return bytes.fromhex(stripped)
-    return stripped.encode("utf-8")
+    return value.strip().encode("utf-8")
 
 
 def demo_selftest() -> None:
