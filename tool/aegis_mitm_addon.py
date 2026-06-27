@@ -117,7 +117,7 @@ class AegisMitmAddon:
             self.dump_dir.mkdir(parents=True, exist_ok=True)
 
     def request(self, flow: http.HTTPFlow) -> None:
-        if KEY_PATH_MARKER in flow.request.path:
+        if self._is_key_get_flow(flow):
             nonce = extract_request_nonce(flow.request.content)
             if nonce:
                 flow.metadata["aegis_request_nonce"] = nonce
@@ -170,7 +170,7 @@ class AegisMitmAddon:
     def response(self, flow: http.HTTPFlow) -> None:
         if flow.response is None:
             return
-        if KEY_PATH_MARKER in flow.request.path:
+        if self._is_key_get_flow(flow):
             self._handle_key_response(flow)
             return
         if "/xeapi/" in flow.request.path:
@@ -213,6 +213,20 @@ class AegisMitmAddon:
             eapi_digest_ok=body.digest_ok,
             dump_path=str(dump_path) if dump_path else None,
         )
+
+    def _is_key_get_flow(self, flow: http.HTTPFlow) -> bool:
+        if KEY_PATH_MARKER in flow.request.path:
+            return True
+        if "/eapi/" not in flow.request.path:
+            return False
+        content_type = flow.request.headers.get("content-type", "")
+        if "application/x-www-form-urlencoded" not in content_type:
+            return False
+        try:
+            body = decrypt_eapi_request_body(flow.request.content)
+        except Exception:
+            return False
+        return KEY_PATH_MARKER in body.api_path
 
     def _handle_key_response(self, flow: http.HTTPFlow) -> None:
         if flow.response is None:
