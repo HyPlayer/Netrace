@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Runtime captures and logs
+*.har
+*.log
+tool/runs/
+tool/runs/**
+
+# Local certificates and private keys
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+tool/capture-ca.pem
+tool/capture-cert.pem
+tool/capture-key.pem
+tool/proxy-server-x25519.key
+
+# mitmproxy local state
+.mitmproxy/
+mitmproxy-ca*
+mitmproxy-dhparam.pem
+
+# Local editor / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

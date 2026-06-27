@@ -1,0 +1,26 @@
+[project]
+name = "xeapi-aegis-mitm"
+version = "0.1.0"
+description = "Aegis /xeapi MITM tooling"
+requires-python = ">=3.11"
+dependencies = [
+  "cryptography",
+  "requests",
+  "textual",
+  "mitmproxy",
+]
+
+[project.scripts]
+aegis-mitm-tui = "tool.aegis_tui:main"
+aegis-mitm-selftest = "tool.aegis_mitm_selftest:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["tool"]
+py-modules = ["aegis_xeapi", "mitm_aegis_xeapi"]
+
+[dependency-groups]
+dev = []
