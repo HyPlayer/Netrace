@@ -22,7 +22,7 @@ from mitmproxy.tools.dump import DumpMaster
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import MouseDown, MouseMove, MouseUp
-from textual.widgets import Collapsible, DataTable, Footer, Header, RichLog, Static, TabbedContent, TabPane
+from textual.widgets import Button, Collapsible, DataTable, Footer, Header, RichLog, Static, TabbedContent, TabPane
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL_DIR = Path(__file__).resolve().parent
@@ -436,6 +436,14 @@ class AegisMitmTui(App[None]):
     #detail-tabs {
         height: 1fr;
     }
+    .copy-toolbar {
+        height: auto;
+        padding: 0 1;
+    }
+    .copy-toolbar Button {
+        margin: 0 1 0 0;
+        min-width: 8;
+    }
     .detail-pane {
         height: 1fr;
         padding: 0 1;
@@ -489,24 +497,53 @@ class AegisMitmTui(App[None]):
             with Vertical(id="details"):
                 with TabbedContent(id="detail-tabs"):
                     with TabPane("Overview", id="tab-overview"):
+                        with Horizontal(classes="copy-toolbar"):
+                            yield Button("URL", id="copy-overview-url")
+                            yield Button("Req Headers", id="copy-overview-request-headers")
+                            yield Button("Req Body", id="copy-overview-request-body")
+                            yield Button("Res Headers", id="copy-overview-response-headers")
+                            yield Button("Res Body", id="copy-overview-response-body")
                         with VerticalScroll(classes="detail-pane"):
                             yield Static("Select a request", id="overview-detail")
                     with TabPane("Request", id="tab-request"):
+                        with Horizontal(classes="copy-toolbar"):
+                            yield Button("URL", id="copy-request-url")
+                            yield Button("Headers", id="copy-request-headers")
+                            yield Button("Body", id="copy-request-body")
+                            yield Button("Raw", id="copy-request-raw")
                         with VerticalScroll(classes="detail-pane"):
                             yield Static("Select a request", id="request-detail")
                     with TabPane("Response", id="tab-response"):
+                        with Horizontal(classes="copy-toolbar"):
+                            yield Button("Headers", id="copy-response-headers")
+                            yield Button("Body", id="copy-response-body")
+                            yield Button("Raw", id="copy-response-raw")
                         with VerticalScroll(classes="detail-pane"):
                             yield Static("Select a request", id="response-detail")
                     with TabPane("Request Body", id="tab-request-body"):
+                        with Horizontal(classes="copy-toolbar"):
+                            yield Button("Copy Body", id="copy-request-body-tab")
+                            yield Button("Copy URL", id="copy-request-body-url")
                         with VerticalScroll(classes="detail-pane"):
                             yield Static("Select a request", id="request-body-detail")
                     with TabPane("Response Body", id="tab-response-body"):
+                        with Horizontal(classes="copy-toolbar"):
+                            yield Button("Copy Body", id="copy-response-body-tab")
+                            yield Button("Copy URL", id="copy-response-body-url")
                         with VerticalScroll(classes="detail-pane"):
                             yield Static("Select a request", id="response-body-detail")
                     with TabPane("Raw", id="tab-raw"):
+                        with Horizontal(classes="copy-toolbar"):
+                            yield Button("Events", id="copy-raw-events")
+                            yield Button("Req Raw", id="copy-raw-request")
+                            yield Button("Res Raw", id="copy-raw-response")
                         with VerticalScroll(classes="detail-pane"):
                             yield Static("Select a request", id="raw-detail")
                     with TabPane("Session", id="tab-session"):
+                        with Horizontal(classes="copy-toolbar"):
+                            yield Button("Session", id="copy-session-info")
+                            yield Button("Session Key", id="copy-session-key")
+                            yield Button("R Plain", id="copy-session-r-plain")
                         with VerticalScroll(classes="detail-pane"):
                             yield Static("Select a request", id="session-detail")
         with Collapsible(title="Logs", collapsed=False, id="log-panel"):
@@ -569,6 +606,17 @@ class AegisMitmTui(App[None]):
             return
         self.selected_flow_id = self._row_key_value(message.row_key)
         self._render_selected_flow()
+
+    def on_button_pressed(self, message: Button.Pressed) -> None:
+        button_id = message.button.id or ""
+        if not button_id.startswith("copy-"):
+            return
+        value = self._copy_value_for_button(button_id)
+        if not value:
+            self.notify("Nothing to copy for the selected request.", title="Copy", severity="warning")
+            return
+        self.copy_to_clipboard(value)
+        self.notify("Copied to clipboard.", title="Copy")
 
     def on_unmount(self) -> None:
         self.stop_event.set()
@@ -791,6 +839,90 @@ class AegisMitmTui(App[None]):
         for name, value in session_fields.items():
             table.add_row(name, str(value) if value else "-")
         return Panel(table, title="Session / Key Info", border_style="yellow")
+
+    def _copy_value_for_button(self, button_id: str) -> str:
+        flow = self.flows.get(self.selected_flow_id or "")
+        if flow is None:
+            return ""
+        request_event = flow.request_event
+        response_event = flow.response_event or flow.key_event
+
+        if button_id in {"copy-overview-url", "copy-request-url", "copy-request-body-url", "copy-response-body-url"}:
+            return flow.url
+        if button_id == "copy-overview-request-headers" or button_id == "copy-request-headers":
+            return self._event_headers_text(request_event, "request_headers")
+        if button_id == "copy-overview-response-headers" or button_id == "copy-response-headers":
+            return self._event_headers_text(response_event, "response_headers")
+        if button_id in {"copy-overview-request-body", "copy-request-body", "copy-request-body-tab"}:
+            return self._event_body_text(request_event)
+        if button_id in {"copy-overview-response-body", "copy-response-body", "copy-response-body-tab"}:
+            return self._event_body_text(response_event)
+        if button_id in {"copy-request-raw", "copy-raw-request"}:
+            return self._event_raw_text(request_event)
+        if button_id in {"copy-response-raw", "copy-raw-response"}:
+            return self._event_raw_text(response_event)
+        if button_id == "copy-raw-events":
+            return json.dumps(flow.events, ensure_ascii=False, indent=2, default=str)
+        if button_id == "copy-session-info":
+            return self._session_text(flow)
+        if button_id == "copy-session-key":
+            return flow.session_key
+        if button_id == "copy-session-r-plain":
+            return flow.r_plain
+        return ""
+
+    def _event_headers_text(self, event: dict[str, Any] | None, field: str) -> str:
+        if event is None or field not in event:
+            return ""
+        return self._json_block(event[field])
+
+    @staticmethod
+    def _event_body_text(event: dict[str, Any] | None) -> str:
+        if event is None:
+            return ""
+        value = event.get("body")
+        if value is None:
+            value = event.get("detail")
+        return str(value) if value is not None else ""
+
+    @staticmethod
+    def _event_raw_text(event: dict[str, Any] | None) -> str:
+        if event is None:
+            return ""
+        dump_path = event.get("raw_dump_path")
+        if dump_path:
+            try:
+                return Path(str(dump_path)).read_bytes().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+        raw_detail = event.get("raw_detail")
+        if raw_detail is not None:
+            return str(raw_detail)
+        detail = event.get("detail")
+        return str(detail) if detail is not None else ""
+
+    def _session_text(self, flow: FlowRecord) -> str:
+        session_fields: dict[str, str] = {
+            "session_id": flow.session_id,
+            "session_key": flow.session_key,
+            "r_plain": flow.r_plain,
+        }
+        for event in flow.events:
+            for name in (
+                "version",
+                "sk",
+                "signature_ok",
+                "body_encoding",
+                "body_gzip",
+                "plaintext_encoding",
+                "public_key_ttl_seconds",
+                "eapi_path",
+                "eapi_digest",
+                "eapi_digest_ok",
+            ):
+                if name in event:
+                    session_fields[name] = str(event[name])
+        return self._json_block({name: value for name, value in session_fields.items() if value})
 
     def _log(self, message: str) -> None:
         self.query_one("#log", RichLog).write(message)

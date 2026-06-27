@@ -71,6 +71,8 @@ uv run aegis-mitm-tui --upstream-proxy socks5://127.0.0.1:9370
 - 原始请求和响应内容
 - session key 等调试信息
 
+每个详情页顶部都有复制按钮，可以把 URL、Headers、Body、Raw Events、session 信息等复制到剪贴板。
+
 底部日志可以折叠，主要用于看运行状态和失败原因。
 
 ## 证书和私钥
