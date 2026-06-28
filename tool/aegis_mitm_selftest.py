@@ -39,6 +39,17 @@ from tool.aegis_mitm_core import (
     rewrite_key_response,
 )
 from tool.aegis_mitm_addon import load_or_create_proxy_private_key, public_bytes_for_private_key
+from tool.handler_eapi import EapiHandler
+from tool.handler_weapi import (
+    WEAPI_SERVER_EXPONENT_HEX,
+    WEAPI_SERVER_MODULUS_HEX,
+    WeapiHandler,
+    encrypt_weapi_params,
+    rsa_encrypt_no_padding_hex,
+)
+from tool.handler_xeapi import XeapiHandler
+from tool.mitm_context import MitmContext
+from tool.protocols import ProtocolRegistry
 
 
 def _key_json(public_key: bytes) -> dict[str, object]:
@@ -203,6 +214,7 @@ def main() -> None:
     assert eapi_body.api_path == "/api/selftest"
     assert eapi_body.digest_ok is True
     assert json.loads(eapi_body.plain.decode("utf-8"))["nonce"] == request_nonce
+    _test_protocol_registry(eapi_params.encode("utf-8"))
     print("aegis mitm selftest ok")
 
 
@@ -215,6 +227,128 @@ def _serial_eapi_params(api_path: str, payload: dict[str, str]) -> str:
     cipher = AegisCrypto.aes_encrypt(b"e82ckenh8dichen8", plain, mode=1)
     assert isinstance(cipher, bytes)
     return cipher.hex().upper()
+
+
+def _test_protocol_registry(key_body: bytes) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        ctx = MitmContext()
+        ctx.event_log = Path(tmp) / "events.jsonl"
+        registry = ProtocolRegistry([XeapiHandler(), EapiHandler(), WeapiHandler()])
+
+        key_flow = _FakeFlow(
+            "POST",
+            "https://interface3.music.163.com/eapi/gorilla/anti/crawler/security/key/get",
+            "/eapi/gorilla/anti/crawler/security/key/get",
+            {"content-type": "application/x-www-form-urlencoded"},
+            key_body,
+        )
+        assert registry.key_handler_for(key_flow, ctx).name == "xeapi"
+        assert registry.request_handler_for(key_flow).name == "eapi"
+
+        miss_flow = _FakeFlow("GET", "https://example.com/plain", "/plain", {}, b"")
+        assert registry.key_handler_for(miss_flow, ctx) is None
+        assert registry.request_handler_for(miss_flow) is None
+        assert miss_flow.request.content == b""
+        assert miss_flow.metadata == {}
+
+        weapi_flow = _FakeFlow(
+            "POST",
+            "https://music.163.com/weapi/test",
+            "/weapi/test",
+            {"content-type": "application/x-www-form-urlencoded"},
+            b"params=abc",
+        )
+        weapi = registry.request_handler_for(weapi_flow)
+        assert weapi is not None
+        assert weapi.name == "weapi"
+        before = weapi_flow.request.content
+        weapi.handle_request(weapi_flow, ctx)
+        assert weapi_flow.request.content == before
+        assert weapi_flow.metadata["netrace_protocol"] == "weapi"
+        event = json.loads(ctx.event_log.read_text(encoding="utf-8").splitlines()[-1])
+        assert event["protocol"] == "weapi"
+        assert event["operation"] == "decrypt-failed"
+        assert event["status"] == "weapi: missing params or encSecKey"
+
+        js_flow = _FakeFlow(
+            "GET",
+            "https://webcache.music.163.net/web/s/core_abcd1234.js",
+            "/web/s/core_abcd1234.js",
+            {},
+            b"",
+        )
+        js_flow.response = _FakeResponse(
+            b'var b="010001",c="00e0b509";var k=new RSAKeyPair(b,"",c);',
+            {"content-type": "application/javascript"},
+        )
+        assert registry.key_handler_for(js_flow, ctx).name == "weapi"
+        weapi.handle_key_response(js_flow, ctx)
+        rewritten_js = js_flow.response.content.decode("utf-8")
+        assert 'new RSAKeyPair("' in rewritten_js
+        assert "new RSAKeyPair(b" not in rewritten_js
+
+        aes_key = b"0123456789ABCDEF"
+        params = encrypt_weapi_params(b'{"hello":"weapi"}', aes_key)
+        enc_sec_key = _rsa_encrypt_no_padding(aes_key[::-1], ctx.weapi_private_key)
+        decrypt_flow = _FakeFlow(
+            "POST",
+            "https://music.163.com/weapi/test",
+            "/weapi/test",
+            {"content-type": "application/x-www-form-urlencoded"},
+            urllib.parse.urlencode({"params": params, "encSecKey": enc_sec_key}).encode("utf-8"),
+        )
+        weapi.handle_request(decrypt_flow, ctx)
+        event = json.loads(ctx.event_log.read_text(encoding="utf-8").splitlines()[-1])
+        assert event["protocol"] == "weapi"
+        assert event["status"] == "weapi-decrypted"
+        assert json.loads(event["detail"]) == {"hello": "weapi"}
+        rewritten_form = urllib.parse.parse_qs(decrypt_flow.request.content.decode("utf-8"))
+        assert rewritten_form["params"][0] == params
+        assert rewritten_form["encSecKey"][0] == rsa_encrypt_no_padding_hex(
+            aes_key[::-1],
+            WEAPI_SERVER_EXPONENT_HEX,
+            WEAPI_SERVER_MODULUS_HEX,
+        )
+
+
+class _FakeHeaders(dict[str, str]):
+    def get(self, key: str, default=None):  # type: ignore[no-untyped-def]
+        for name, value in self.items():
+            if name.lower() == key.lower():
+                return value
+        return default
+
+
+class _FakeRequest:
+    def __init__(self, method: str, url: str, path: str, headers: dict[str, str], content: bytes) -> None:
+        self.method = method
+        self.pretty_url = url
+        self.path = path
+        self.headers = _FakeHeaders(headers)
+        self.content = content
+
+
+class _FakeFlow:
+    def __init__(self, method: str, url: str, path: str, headers: dict[str, str], content: bytes) -> None:
+        self.id = f"fake:{path}"
+        self.request = _FakeRequest(method, url, path, headers, content)
+        self.response = None
+        self.metadata: dict[str, str] = {}
+
+
+class _FakeResponse:
+    def __init__(self, content: bytes, headers: dict[str, str] | None = None, status_code: int = 200) -> None:
+        self.content = content
+        self.headers = _FakeHeaders(headers or {})
+        self.status_code = status_code
+
+
+def _rsa_encrypt_no_padding(plain: bytes, private_key) -> str:  # type: ignore[no-untyped-def]
+    numbers = private_key.private_numbers().public_numbers
+    encrypted = pow(int.from_bytes(plain, "big"), numbers.e, numbers.n)
+    return encrypted.to_bytes(private_key.key_size // 8, "big").hex()
+
+
 
 
 if __name__ == "__main__":

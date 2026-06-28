@@ -1,6 +1,6 @@
 # Netrace
 
-Netrace 是一个用于本地逆向和调试网易云音乐 `/xeapi` Aegis 加密流量和传统 `/eapi` 加密流量的 MITM 工具。它内嵌 mitmproxy，并提供一个 TUI 界面来查看命中的请求、响应、解密后的 payload、原文和 session key 信息。
+Netrace 是一个用于本地逆向和调试网易云音乐 `/xeapi` Aegis 加密流量、传统 `/eapi` 加密流量，以及后续协议的 MITM 工具。它内嵌 mitmproxy，并提供一个 TUI 界面来查看命中的请求、响应、解密后的 payload、原文和 session key 信息。
 
 请只在你自己的设备、账号和授权网络环境中使用。抓包结果、证书、私钥、cookie、日志都可能包含敏感信息，不要提交或分享。
 
@@ -106,6 +106,8 @@ tool/proxy-server-x25519.key
 
 对于 `/eapi`，工具会解开表单中的 `params` 字段，校验 envelope 里的 MD5，并尝试用 legacy eapi response key 解密响应。`/eapi` 请求不会被改写，只做观察和展示。
 
+对于网页登录页使用的 core JS，工具会把其中的 `new RSAKeyPair(...)` 公钥替换为本地 RSA 公钥。之后 `/weapi` 请求会用本地私钥解开客户端 `encSecKey`，按 weapi 的双层 AES-CBC 解开 `params` 并展示请求明文，再把 `encSecKey` 用原始网页 RSA 公钥重写后发给服务端；响应按明文透传。
+
 没有命中的请求不会处理，会原样放行。
 
 ## 常用参数
@@ -115,6 +117,7 @@ uv run netrace --response-mode auto
 uv run netrace --ssl-verify-upstream
 uv run netrace --public-key-ttl-seconds 600
 uv run netrace --no-force-key-refresh-on-miss
+uv run netrace --weapi-private-key-file tool/weapi-rsa-private.key
 ```
 
 `--response-mode` 可选：
@@ -128,14 +131,19 @@ uv run netrace --no-force-key-refresh-on-miss
 ## 文件说明
 
 ```text
-aegis_xeapi.py             Aegis 加解密核心实现和命令行辅助
-mitm_aegis_xeapi.py        早期 standalone MITM 辅助脚本
-tool/aegis_tui.py          Textual TUI 和内嵌 mitmproxy 启动器
-tool/aegis_mitm_addon.py   mitmproxy addon
-tool/aegis_mitm_core.py    请求解密、响应解密、公钥替换等共享逻辑
+aegis_xeapi.py              Aegis 加解密核心实现和命令行辅助
+mitm_aegis_xeapi.py         早期 standalone MITM 辅助脚本
+tool/aegis_tui.py           Textual TUI 和内嵌 mitmproxy 启动器
+tool/aegis_mitm_addon.py    mitmproxy 分发壳
+tool/mitm_context.py        共享状态、dump 和事件输出
+tool/protocols.py           协议 handler 接口和 registry
+tool/handler_xeapi.py       /xeapi handler
+tool/handler_eapi.py        /eapi handler
+tool/handler_weapi.py       /weapi core JS 公钥替换和请求解密 handler
+tool/key_hijack.py          可复用公钥替换逻辑
 tool/aegis_mitm_selftest.py 离线自测
-tool/runs/events.jsonl     TUI 读取的运行事件
-tool/runs/dumps/           请求和响应 dump
+tool/runs/events.jsonl      TUI 读取的运行事件
+tool/runs/dumps/            请求和响应 dump
 ```
 
 ## 调试建议

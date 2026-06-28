@@ -91,6 +91,7 @@ class EmbeddedMitmRunner:
                 aegis_proxy_private_key_file=self.args.proxy_private_key_file,
                 aegis_hkdf_salt=self.args.hkdf_salt,
                 aegis_hkdf_info=self.args.hkdf_info,
+                weapi_private_key_file=self.args.weapi_private_key_file,
             )
             loop.run_until_complete(self.master.run())
             if not self.lifecycle.running_seen:
@@ -719,6 +720,9 @@ class AegisMitmTui(App[None]):
             "body_encoding",
             "plaintext_encoding",
             "public_key_ttl_seconds",
+            "protocol",
+            "operation",
+            "key_flow",
             "dump_path",
         ):
             if name in event:
@@ -823,6 +827,9 @@ class AegisMitmTui(App[None]):
         }
         for event in flow.events:
             for name in (
+                "protocol",
+                "operation",
+                "key_flow",
                 "version",
                 "sk",
                 "signature_ok",
@@ -833,6 +840,7 @@ class AegisMitmTui(App[None]):
                 "eapi_path",
                 "eapi_digest",
                 "eapi_digest_ok",
+                "debug",
             ):
                 if name in event:
                     session_fields[name] = str(event[name])
@@ -909,6 +917,9 @@ class AegisMitmTui(App[None]):
         }
         for event in flow.events:
             for name in (
+                "protocol",
+                "operation",
+                "key_flow",
                 "version",
                 "sk",
                 "signature_ok",
@@ -919,6 +930,7 @@ class AegisMitmTui(App[None]):
                 "eapi_path",
                 "eapi_digest",
                 "eapi_digest_ok",
+                "debug",
             ):
                 if name in event:
                     session_fields[name] = str(event[name])
@@ -980,6 +992,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--proxy-private-key-file",
         default=str(TOOL_DIR / "proxy-server-x25519.key"),
         help="Persistent X25519 private key used as the forged Aegis server key.",
+    )
+    parser.add_argument(
+        "--weapi-private-key-file",
+        default=str(TOOL_DIR / "weapi-rsa-private.key"),
+        help="Persistent RSA private key used as the forged /weapi web RSA key.",
     )
     parser.add_argument("--hkdf-salt", default="")
     parser.add_argument("--hkdf-info", default="")
