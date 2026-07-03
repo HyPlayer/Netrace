@@ -1,8 +1,9 @@
-# Netrace TUI
+# Netrace UI
 
-Textual-based helper for driving Netrace, an embedded mitmproxy TUI for active
-MITM against the Aegis `/xeapi` flow, observing traditional `/eapi` traffic,
-and adding future protocol handlers during local reverse-engineering.
+PySide6 GUI and Textual TUI helpers for driving Netrace, an embedded mitmproxy
+tool for active MITM against the Aegis `/xeapi` flow, observing traditional
+`/eapi` traffic, and adding future protocol handlers during local
+reverse-engineering.
 
 The addon replaces the public key returned by
 `/gorilla/anti/crawler/security/key/get` with a local X25519 key. That lets the
@@ -29,6 +30,12 @@ uv sync
 ## Run
 
 ```powershell
+uv run netrace-gui --listen-host 0.0.0.0 --listen-port 8080
+```
+
+The original TUI remains available:
+
+```powershell
 uv run netrace --listen-host 0.0.0.0 --listen-port 8080
 ```
 
@@ -38,7 +45,10 @@ HTTP(S) proxy and install/trust the mitmproxy CA certificate.
 ## Files
 
 ```text
-tool/aegis_tui.py        Textual UI and embedded mitmproxy launcher
+tool/aegis_gui.py        PySide6 GUI
+tool/aegis_tui.py        Textual TUI
+tool/aegis_runtime.py    Shared embedded mitmproxy launcher and CLI parser
+tool/aegis_events.py     Shared flow aggregation, copy, and export helpers
 tool/aegis_mitm_addon.py Thin mitmproxy dispatch addon
 tool/mitm_context.py     Shared state, dumps, and JSONL events
 tool/protocols.py        Protocol handler interface and registry
@@ -69,8 +79,11 @@ python .\tool\aegis_tui.py --confdir E:\mitm\conf
 python .\tool\aegis_tui.py --ca-pem E:\mitm\mitmproxy-ca.pem
 ```
 
-By default, the TUI loads `tool/capture-ca.pem` if it exists. The file must
+By default, the GUI/TUI strictly loads `tool/capture-ca.pem`. The file must
 contain both the trusted CA certificate and its private key, in PEM format.
+Fresh checkouts do not include this sensitive local file, so create it before
+launching or pass `--ca-pem <path>`. If it is missing, startup reports
+`CA PEM not found` and leaves the embedded mitmproxy stopped.
 
 By default, embedded mitmproxy runs through the upstream proxy
 `http://127.0.0.1:9370`. Override it with `--upstream-proxy`; explicit

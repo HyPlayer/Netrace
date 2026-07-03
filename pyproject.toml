@@ -8,10 +8,12 @@ dependencies = [
   "requests",
   "textual",
   "mitmproxy",
+  "PySide6",
 ]
 
 [project.scripts]
 netrace = "tool.aegis_tui:main"
+netrace-gui = "tool.aegis_gui:main"
 netrace-selftest = "tool.aegis_mitm_selftest:main"
 aegis-mitm-tui = "tool.aegis_tui:main"
 aegis-mitm-selftest = "tool.aegis_mitm_selftest:main"
