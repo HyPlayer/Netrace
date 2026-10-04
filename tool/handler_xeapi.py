@@ -5,7 +5,9 @@ from mitmproxy import http
 
 from aegis_xeapi import decode_session_key
 from tool.aegis_mitm_core import (
-    KEY_PATH_MARKER,
+    key_material,
+    key_profile_from_os,
+    is_key_api_path,
     decrypt_and_rewrap_xeapi_request,
     decrypt_eapi_request_body,
     extract_request_nonce,
@@ -21,10 +23,15 @@ class XeapiHandler(BaseProtocolHandler):
     name = "xeapi"
 
     def matches_request(self, flow: http.HTTPFlow) -> bool:
-        return "/xeapi/" in flow.request.path
+        # Normal xeapi traffic is handled here.  The direct BSR endpoint is
+        # also owned by this handler so its JSON request/response can use the
+        # same key replacement logic as the legacy eapi endpoint.
+        return "/xeapi/" in flow.request.path or (
+            flow.request.path.startswith("/api/") and is_key_api_path(flow.request.path)
+        )
 
     def is_key_flow(self, flow: http.HTTPFlow, ctx: MitmContext) -> bool:
-        if KEY_PATH_MARKER in flow.request.path:
+        if is_key_api_path(flow.request.path):
             return True
         if "/eapi/" not in flow.request.path:
             return False
@@ -35,9 +42,11 @@ class XeapiHandler(BaseProtocolHandler):
             body = decrypt_eapi_request_body(flow.request.content)
         except Exception:
             return False
-        return KEY_PATH_MARKER in body.api_path
+        return is_key_api_path(body.api_path)
 
     def handle_key_request(self, flow: http.HTTPFlow, ctx: MitmContext) -> None:
+        profile = self._key_profile(flow)
+        flow.metadata["aegis_key_profile"] = profile
         nonce = extract_request_nonce(flow.request.content)
         flow.metadata["netrace_protocol"] = self.name
         flow.metadata["netrace_key_handler"] = self.name
@@ -56,7 +65,11 @@ class XeapiHandler(BaseProtocolHandler):
         if flow.response is None:
             return
         try:
-            rewrite_aegis_key_response(flow, ctx, protocol=self.name)
+            profile = flow.metadata.get("aegis_key_profile", "mobile")
+            static_key, sign_key = key_material(profile)
+            rewrite_aegis_key_response(
+                flow, ctx, protocol=self.name, static_key=static_key, sign_key=sign_key
+            )
         except Exception as exc:
             dump_path = ctx.dump(flow, "key-response-failed", flow.response.content)
             ctx.emit_event(
@@ -72,6 +85,33 @@ class XeapiHandler(BaseProtocolHandler):
             )
 
     def handle_request(self, flow: http.HTTPFlow, ctx: MitmContext) -> None:
+        # Some PC clients route legacy eapi envelopes through a xeapi-looking
+        # URL.  Do not feed their `params` body to the B/S/R decoder.
+        if "/eapi/" in flow.request.path:
+            try:
+                values = urllib.parse.parse_qs(flow.request.content.decode("utf-8"), keep_blank_values=True)
+            except Exception:
+                values = {}
+            if "params" in values and not {"B", "S", "R"}.issubset(values):
+                try:
+                    body = decrypt_eapi_request_body(flow.request.content)
+                    flow.metadata["aegis_mitm_hit"] = True
+                    flow.metadata["aegis_protocol"] = "eapi"
+                    flow.metadata["netrace_protocol"] = "eapi"
+                    ctx.emit_event(
+                        "request",
+                        flow,
+                        protocol="eapi",
+                        operation="request",
+                        status="eapi-decrypted",
+                        detail=text_preview(body.plain),
+                        eapi_path=body.api_path,
+                        eapi_digest=body.digest,
+                        eapi_digest_ok=body.digest_ok,
+                    )
+                    return
+                except Exception:
+                    pass
         if ctx.real_public_info is None:
             ctx.emit_event(
                 "miss",
@@ -93,21 +133,36 @@ class XeapiHandler(BaseProtocolHandler):
             return
         raw_request = flow.request.content
         try:
+            static_key, _ = key_material(self._key_profile(flow))
             rewritten, dynamic_key, plain, r_plain = decrypt_and_rewrap_xeapi_request(
                 raw_request,
-                static_key=ctx.static_key,
+                static_key=static_key,
                 proxy_private_key=ctx.proxy_private,
                 real_public_info=ctx.real_public_info,
                 hkdf_salt=ctx.hkdf_salt,
                 hkdf_info=ctx.hkdf_info,
             )
         except Exception as exc:
+            try:
+                form_values = urllib.parse.parse_qs(raw_request.decode("utf-8"), keep_blank_values=True)
+                wire_diag = {
+                    "form_fields": sorted(form_values),
+                    "C_len": len(form_values.get("C", [""])[0]),
+                    "B_len": len(form_values.get("B", [""])[0]),
+                    "S_len": len(form_values.get("S", [""])[0]),
+                    "R_len": len(form_values.get("R", [""])[0]),
+                }
+            except Exception:
+                wire_diag = {}
             ctx.emit_event(
                 "decrypt-failed",
                 flow,
                 protocol=self.name,
                 operation="decrypt-failed",
                 status=str(exc),
+                key_profile=self._key_profile(flow),
+                **wire_diag,
+                request_dump_path=str(ctx.dump(flow, "csr-request-failed", raw_request) or "") or None,
             )
             return
         flow.request.content = rewritten
@@ -225,3 +280,32 @@ class XeapiHandler(BaseProtocolHandler):
             operation="key-request",
             status="injected x-ud-sts=10000",
         )
+
+    def _key_profile(self, flow: http.HTTPFlow) -> str:
+        header_os = flow.request.headers.get("x-os") or flow.request.headers.get("X-OS")
+        if header_os:
+            return key_profile_from_os(header_os)
+        content_type = flow.request.headers.get("content-type", "").lower()
+        if "json" in content_type or flow.request.content.lstrip().startswith(b"{"):
+            try:
+                import json
+                payload = json.loads(flow.request.content.decode("utf-8"))
+                if isinstance(payload, dict):
+                    return key_profile_from_os(payload.get("os"))
+            except Exception:
+                pass
+        if "/eapi/" in flow.request.path:
+            try:
+                body = decrypt_eapi_request_body(flow.request.content)
+                import json
+                payload = json.loads(body.plain.decode("utf-8"))
+                if isinstance(payload, dict):
+                    return key_profile_from_os(payload.get("os"))
+            except Exception:
+                pass
+        cookie = flow.request.headers.get("cookie", "")
+        for item in cookie.split(";"):
+            name, _, value = item.strip().partition("=")
+            if name.lower() == "os" and value:
+                return key_profile_from_os(value)
+        return "mobile"

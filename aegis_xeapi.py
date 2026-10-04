@@ -157,7 +157,13 @@ class AegisCrypto:
         if encoded:
             offset = (rand16[0] & 0x0F) % len(encoded)
             encoded = encoded[-offset:] + encoded[:-offset] if offset else encoded
-        mixed = base64.b64decode(encoded)
+        # CSR keeps the XOR-mixed static ciphertext as raw AES blocks.  The
+        # legacy BSR format base64-encoded this segment before rotation.
+        is_base64_text = all(byte in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=" for byte in encoded)
+        if len(encoded) % 16 == 0 and not is_base64_text:
+            mixed = encoded
+        else:
+            mixed = base64.b64decode(encoded)
         return bytes(b ^ rand16[i & 0x0F] for i, b in enumerate(mixed))
 
     @staticmethod

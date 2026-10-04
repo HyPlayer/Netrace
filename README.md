@@ -118,6 +118,11 @@ tool/proxy-server-x25519.key
 /gorilla/anti/crawler/security/key/get
 ```
 
+同时兼容新版 BSR/CSR 公钥路径 `/api/bsr/sk/get`、`/eapi/bsr/sk/get` 以及
+`/api/gorilla/anti/crawler/security/key/get`。移动端和 PC 端会根据请求中的
+`os`、`x-os` 或 Cookie 自动选择各自的静态密钥与握手签名密钥，PC 端旧的
+`/eapi/gorilla/...` 二进制响应也会按原格式解包后重写。
+
 然后把服务端返回的 Aegis 公钥替换成本地代理公钥。这样代理就可以解开请求里的 `S`，解密 `B`，展示明文请求，再用真实服务端公钥重新封装并放行。
 
 对于 `/eapi`，工具会解开表单中的 `params` 字段，校验 envelope 里的 MD5，并尝试用 legacy eapi response key 解密响应。`/eapi` 请求不会被改写，只做观察和展示。

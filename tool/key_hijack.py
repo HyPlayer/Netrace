@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from mitmproxy import http
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
 
 from aegis_xeapi import b64e
 from tool.aegis_mitm_core import (
@@ -17,6 +18,8 @@ def rewrite_aegis_key_response(
     ctx: MitmContext,
     *,
     protocol: str,
+    static_key: bytes | None = None,
+    sign_key: bytes | None = None,
 ) -> bool:
     if flow.response is None:
         return False
@@ -24,8 +27,8 @@ def rewrite_aegis_key_response(
     result = rewrite_key_response(
         body.payload,
         proxy_public_key_b64=b64e(ctx.proxy_public),
-        static_key=ctx.static_key,
-        sign_key=ctx.sign_key,
+        static_key=static_key or ctx.static_key,
+        sign_key=sign_key or ctx.sign_key,
         request_nonce=flow.metadata.get("aegis_request_nonce"),
         ttl_seconds=ctx.public_key_ttl_seconds,
     )
@@ -54,5 +57,9 @@ def rewrite_aegis_key_response(
         body_gzip=body.legacy_gzip,
         plaintext_encoding=result.plaintext_encoding,
         public_key_ttl_seconds=ctx.public_key_ttl_seconds,
+        proxy_public_key=b64e(ctx.proxy_public),
+        proxy_private_key=b64e(
+            ctx.proxy_private.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+        ),
     )
     return True

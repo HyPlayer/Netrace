@@ -24,9 +24,34 @@ from aegis_xeapi import AegisCrypto, PublicKeyInfo, b64d, b64e, decode_key
 
 DEFAULT_STATIC_KEY_HEX = "ab1d5a430f6bb04a3f01e81ddd72bd916d5ce591248ac128714806d7f8fb1b84"
 DEFAULT_SIGN_KEY_B64 = "mUHCwVNWJbunMqAHf5MImuirT6plvs6VSFW62MGHstFQxhBGdEoIhLItH3djc4+FB/OKty3+lL2rGeoFBpVe5g=="
+PC_STATIC_KEY_B64 = "hw7WBGc5HWCZzhBM50P3pDvtn/RzxDy+FW+wygIErn4="
+PC_SIGN_KEY_B64 = "YN6+QFyG6D3rc3J1VT6sqwaPKE+GdwxtDweGmEPklcgrEohaE60m4Y/TtI4R/vVi17JUwwCIQF0Q2FXFmMlGrg=="
 LEGACY_EAPI_RESPONSE_KEY = b"e82ckenh8dichen8"
 EAPI_SEPARATOR = "-36cd479b6b5-"
-KEY_PATH_MARKER = "/gorilla/anti/crawler/security/key/get"
+# The key service has existed behind several route aliases.  Keep the
+# markers independent from the transport prefix (`/api`, `/eapi`, or
+# `/xeapi`) so that all of them are recognized by the MITM key flow.
+KEY_PATH_MARKERS = (
+    "/gorilla/anti/crawler/security/key/get",
+    "/bsr/sk/get",
+)
+# Backwards-compatible singular name for callers that only need the original
+# route marker.
+KEY_PATH_MARKER = KEY_PATH_MARKERS[0]
+
+
+def is_key_api_path(path: str) -> bool:
+    return any(marker in path for marker in KEY_PATH_MARKERS)
+
+
+def key_profile_from_os(value: Any) -> str:
+    return "pc" if str(value or "").lower() in {"pc", "desktop", "windows", "mac", "osx"} else "mobile"
+
+
+def key_material(profile: str) -> tuple[bytes, bytes]:
+    if profile == "pc":
+        return base64.b64decode(PC_STATIC_KEY_B64), PC_SIGN_KEY_B64.encode("ascii")
+    return bytes.fromhex(DEFAULT_STATIC_KEY_HEX), DEFAULT_SIGN_KEY_B64.encode("ascii")
 
 
 def json_loads_bytes(data: bytes) -> Any:
@@ -348,7 +373,11 @@ def rewrite_key_response(
 
 def extract_dynamic_key_from_s_plain(s_plain: bytes) -> bytes:
     first = s_plain.split(b"|", 1)[0]
-    dynamic_key = base64.b64decode(first)
+    # CSR handshake stores the dynamic key as unpadded base64url; legacy BSR
+    # used padded standard base64.  urlsafe_b64decode accepts both once the
+    # missing padding is restored.
+    first += b"=" * ((4 - len(first) % 4) % 4)
+    dynamic_key = base64.urlsafe_b64decode(first)
     if len(dynamic_key) not in (16, 24, 32):
         raise ValueError(f"unexpected dynamic key length: {len(dynamic_key)}")
     return dynamic_key
@@ -364,23 +393,60 @@ def decrypt_and_rewrap_xeapi_request(
     hkdf_info: bytes | None = None,
 ) -> tuple[bytes, bytes, bytes, bytes]:
     values = parse_form_bytes(body)
-    missing = [name for name in ("B", "S", "R") if name not in values]
+    # Mobile xeapi historically called the business ciphertext `B`; newer
+    # clients (CSR) call the same field `C` and use base64url encoding.
+    business_field = "B" if "B" in values else "C"
+    missing = [name for name in (business_field, "S", "R") if name not in values]
     if missing:
         raise ValueError(f"missing form fields: {', '.join(missing)}")
 
-    s_plain = AegisCrypto.unwrap_dynamic_key_for_test(
-        b64d(values["S"]),
-        own_private_key=proxy_private_key,
-        salt=hkdf_salt,
-        info=hkdf_info,
-    )
-    dynamic_key = extract_dynamic_key_from_s_plain(s_plain)
-    b_plain = AegisCrypto.decrypt_business_data(
-        b64d(values["B"]),
-        static_key=static_key,
-        dynamic_key=dynamic_key,
-    )
-    r_plain = AegisCrypto.decrypt_version_info(b64d(values["R"]), static_key=static_key)
+    def decode_wire_value(value: str) -> bytes:
+        # CSR uses unpadded base64url for C while legacy B/S/R uses regular
+        # base64.  Accept both representations transparently.
+        raw = value.encode("ascii")
+        raw += b"=" * ((4 - len(raw) % 4) % 4)
+        return base64.urlsafe_b64decode(raw)
+
+    try:
+        s_wire = decode_wire_value(values["S"])
+    except Exception as exc:
+        raise ValueError(f"CSR S base64 decode failed: {exc}; chars={len(values['S'])}") from exc
+    try:
+        c_wire = decode_wire_value(values[business_field])
+    except Exception as exc:
+        raise ValueError(f"CSR {business_field} base64 decode failed: {exc}; chars={len(values[business_field])}") from exc
+    try:
+        r_wire = decode_wire_value(values["R"])
+    except Exception as exc:
+        raise ValueError(f"CSR R base64 decode failed: {exc}; chars={len(values['R'])}") from exc
+    try:
+        s_plain = AegisCrypto.unwrap_dynamic_key_for_test(
+            s_wire,
+            own_private_key=proxy_private_key,
+            salt=hkdf_salt,
+            info=hkdf_info,
+        )
+    except Exception as exc:
+        raise ValueError(f"CSR S unwrap failed: wire_len={len(s_wire)}; {exc}") from exc
+    try:
+        dynamic_key = extract_dynamic_key_from_s_plain(s_plain)
+    except Exception as exc:
+        raise ValueError(f"CSR dynamic key extract failed: S_plain_len={len(s_plain)}; first32={s_plain[:32].hex()}; {exc}") from exc
+    try:
+        b_plain = AegisCrypto.decrypt_business_data(
+            c_wire,
+            static_key=static_key,
+            dynamic_key=dynamic_key,
+        )
+    except Exception as exc:
+        raise ValueError(
+            f"CSR {business_field} business decrypt failed: wire_len={len(c_wire)}; "
+            f"dynamic_len={len(dynamic_key)}; static_len={len(static_key)}; {exc}"
+        ) from exc
+    try:
+        r_plain = AegisCrypto.decrypt_version_info(r_wire, static_key=static_key)
+    except Exception as exc:
+        raise ValueError(f"CSR R decrypt failed: wire_len={len(r_wire)}; static_len={len(static_key)}; {exc}") from exc
 
     real_s = AegisCrypto.wrap_dynamic_key(
         s_plain,

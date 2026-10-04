@@ -184,6 +184,19 @@ def main() -> None:
     )
     assert real_s_plain.startswith(b64e(dynamic_key).encode("ascii"))
 
+    # CSR uses C instead of the legacy B business field and base64url wire
+    # encoding; the same unwrap/rewrap path must accept it.
+    csr_values = urllib.parse.parse_qs(proxy_body.decode("utf-8"))
+    csr_values["C"] = csr_values.pop("B")
+    csr_body = urllib.parse.urlencode({k: v[0] for k, v in csr_values.items()}).encode()
+    csr_rewritten, _, _, _ = decrypt_and_rewrap_xeapi_request(
+        csr_body,
+        static_key=static_key,
+        proxy_private_key=proxy_private,
+        real_public_info=PublicKeyInfo.from_json(original_key_json),
+    )
+    assert "C=" in csr_rewritten.decode()
+
     session_id = "f5af34cd95e64d48a33dd00f01f03384"
     session_key_text = "44866835ed63479da39e05d2733a7121"
     assert decode_session_key(session_key_text) == session_key_text.encode("utf-8")
@@ -244,6 +257,30 @@ def _test_protocol_registry(key_body: bytes) -> None:
         )
         assert registry.key_handler_for(key_flow, ctx).name == "xeapi"
         assert registry.request_handler_for(key_flow).name == "eapi"
+
+        # New BSR/CSR key endpoint: direct /api route with a JSON request.
+        direct_key_flow = _FakeFlow(
+            "POST",
+            "https://interface3.music.163.com/api/bsr/sk/get",
+            "/api/bsr/sk/get",
+            {"content-type": "application/json"},
+            json.dumps({"nonce": "1234567890123456", "requestType": "active"}).encode(),
+        )
+        assert registry.key_handler_for(direct_key_flow, ctx).name == "xeapi"
+        assert registry.request_handler_for(direct_key_flow).name == "xeapi"
+        registry.key_handler_for(direct_key_flow, ctx).handle_key_request(direct_key_flow, ctx)
+        assert direct_key_flow.metadata["aegis_request_nonce"] == "1234567890123456"
+
+        # The legacy BSR alias is still recognized as a key flow.
+        legacy_bsr_flow = _FakeFlow(
+            "POST",
+            "https://interface3.music.163.com/eapi/bsr/sk/get",
+            "/eapi/bsr/sk/get",
+            {"content-type": "application/x-www-form-urlencoded"},
+            key_body,
+        )
+        assert registry.key_handler_for(legacy_bsr_flow, ctx).name == "xeapi"
+        assert registry.request_handler_for(legacy_bsr_flow).name == "eapi"
 
         miss_flow = _FakeFlow("GET", "https://example.com/plain", "/plain", {}, b"")
         assert registry.key_handler_for(miss_flow, ctx) is None
